@@ -6,11 +6,12 @@ import json
 import time
 import hmac
 import hashlib
-from Crypto.Cipher import AES
-from Crypto.Random import get_random_bytes
+from Cryptodome.Cipher import AES
+from Cryptodome.Random import get_random_bytes
 import base64
 
-# Shared secret keys (must be identical on server and client)
+# Shared secret keys. In a real deployment these should come from config or env,
+# but for this demo both sides must use the same values.
 SECRET_KEY = b"supersecretkey123"   # for HMAC (any length is fine)
 AES_KEY    = b"thisisaeskey1234"    # 16 bytes → AES-128
 
@@ -31,12 +32,14 @@ def make_packet(ptype: str, data: dict, seq: int = 0) -> bytes:
     }
     raw_json = json.dumps(packet, separators=(",", ":")).encode("utf-8")
 
-    # Encrypt with AES-CBC
+    # AES-CBC needs a fresh IV per packet so repeated payloads do not encrypt
+    # to the same ciphertext.
     iv = get_random_bytes(16)
     cipher = AES.new(AES_KEY, AES.MODE_CBC, iv)
     ciphertext = cipher.encrypt(_pad(raw_json))
 
-    # Compute HMAC over iv+ciphertext
+    # Authenticate the IV and ciphertext together so tampering is detected
+    # before we try to decrypt the packet.
     mac = hmac.new(SECRET_KEY, iv + ciphertext, hashlib.sha256).hexdigest()
 
     # Final packet structure
@@ -56,7 +59,7 @@ def parse_packet(raw: bytes) -> dict:
     except Exception as e:
         raise ValueError(f"Malformed secure packet: {e}")
 
-    # Verify HMAC
+    # Verify integrity before decryption to avoid accepting modified payloads.
     expected_mac = hmac.new(SECRET_KEY, iv + ciphertext, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(mac, expected_mac):
         raise ValueError("Invalid HMAC: packet tampered")
