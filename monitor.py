@@ -21,9 +21,7 @@ class NetworkMonitor:
     def __init__(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.settimeout(2.0)
-        # ✅ Do NOT bind to SERVER_PORT (conflicts with server)
-        # Instead, bind to a random free local port if you want explicit binding:
-        # self.sock.bind(("0.0.0.0", 0))
+       
 
         self.server = (SERVER_IP, SERVER_PORT)
 
@@ -148,8 +146,7 @@ class NetworkMonitor:
 
     def run(self):
         print(f"[MONITOR] Connecting to {SERVER_IP}:{SERVER_PORT}...")
-        # ✅ No JOIN packet needed if you don’t want monitor treated as a player
-        # self.sock.sendto(make_packet(PType.JOIN, {...}), self.server)
+        
 
         threading.Thread(target=self._receive_loop, daemon=True).start()
         threading.Thread(target=self._ping_loop, daemon=True).start()
