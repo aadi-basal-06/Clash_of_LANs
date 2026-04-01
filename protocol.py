@@ -6,7 +6,8 @@ from Crypto.Cipher import AES#symm encryption
 from Crypto.Random import get_random_bytes# generate a random initialisation vector
 import base64#encode binary data to text for safe transmission
 
-# Shared secret keys (must be identical on server and client)
+# Shared secret keys. In a real deployment these should come from config or env,
+# but for this demo both sides must use the same values.
 SECRET_KEY = b"supersecretkey123"   # for HMAC (any length is fine)
 AES_KEY    = b"thisisaeskey1234"    # 16 bytes → AES-128
 
@@ -27,12 +28,14 @@ def make_packet(ptype: str, data: dict, seq: int = 0) -> bytes:# returns a packe
     }
     raw_json = json.dumps(packet, separators=(",", ":")).encode("utf-8")#python dictonary to json string and then to bytes
 
-    # Encrypt with AES-CBC
+    # AES-CBC needs a fresh IV per packet so repeated payloads do not encrypt
+    # to the same ciphertext.
     iv = get_random_bytes(16)
     cipher = AES.new(AES_KEY, AES.MODE_CBC, iv)# creates the cipher object-CIPHER BLOCK CHAINING MODE
     ciphertext = cipher.encrypt(_pad(raw_json))#here actual encryption happens
 
-    # Compute HMAC over iv+ciphertext
+    # Authenticate the IV and ciphertext together so tampering is detected
+    # before we try to decrypt the packet.
     mac = hmac.new(SECRET_KEY, iv + ciphertext, hashlib.sha256).hexdigest()
 
     # Final packet structure
