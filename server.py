@@ -30,9 +30,6 @@ HOST = "0.0.0.0"       # bind to all available network interfaces
 PORT = 5555            # UDP port the server listens on
 TICK_RATE = 20         # server tick rate in Hz (updates per second)
 TIMEOUT_SEC = 10       # seconds of silence before dropping a client
-MAX_PACKET_SIZE = 4096 # maximum UDP datagram size in bytes
-MAX_CHAT_LENGTH = 256  # maximum allowed chat message length
-MAX_PLAYERS = 10       # maximum number of concurrent players
 
 
 class GameServer:
@@ -60,10 +57,6 @@ class GameServer:
         # Thread-safe FIFO queue that decouples receiving from processing
         self._packet_queue = queue.Queue()
 
-        # Track when the server was started for uptime reporting
-        self._start_time = time.time()
-        self._running = False
-
         print(f"[SERVER] Listening on {HOST}:{PORT}")
         print(f"[SERVER] Tick rate: {TICK_RATE} Hz | Timeout: {TIMEOUT_SEC}s\n")
 
@@ -77,42 +70,6 @@ class GameServer:
         """
         self.seq += 1
         return self.seq
-
-    def get_player_count(self):
-        """Return the number of currently connected players (thread-safe)."""
-        with self.lock:
-            return len(self.clients)
-
-    def get_uptime(self):
-        """Return server uptime in seconds since start."""
-        return time.time() - self._start_time
-
-    def _format_uptime(self):
-        """Return server uptime as a formatted HH:MM:SS string."""
-        uptime = int(self.get_uptime())
-        mins, secs = divmod(uptime, 60)
-        hrs, mins = divmod(mins, 60)
-        return f"{hrs:02d}:{mins:02d}:{secs:02d}"
-
-    def get_stats_summary(self):
-        """Return a snapshot dict of current server statistics.
-
-        Useful for external monitoring or future REST API integration.
-        """
-        with self.lock:
-            return {
-                "uptime": self._format_uptime(),
-                "player_count": len(self.clients),
-                "max_players": MAX_PLAYERS,
-                "players": list(self.game_state.keys()),
-                "total_packets_recv": sum(
-                    s.get("packets_recv", 0) for s in self.stats.values()
-                ),
-                "total_packets_sent": sum(
-                    s.get("packets_sent", 0) for s in self.stats.values()
-                ),
-                "seq": self.seq,
-            }
 
     def _broadcast(self, packet: bytes, exclude_id=None):
         """Send a packet to every connected client, optionally skipping one.
@@ -177,18 +134,11 @@ class GameServer:
         updated state to everyone else.
         """
         player_id = pkt["data"]["player_id"]
-        name = pkt["data"].get("name", player_id).strip()[:16] or player_id
+        name = pkt["data"].get("name", player_id)
         color = pkt["data"].get("color", "#ffffff")
 
         with self.lock:
-            # Reject new connections if the server is full
             already_connected = player_id in self.clients
-            if not already_connected and len(self.clients) >= MAX_PLAYERS:
-                print(f"[SERVER] Rejected '{name}' - server full ({MAX_PLAYERS}/{MAX_PLAYERS})")
-                error_pkt = make_packet(PType.ERROR, {"message": "Server is full"}, self._next_seq())
-                self._send(error_pkt, addr)
-                return
-
             self.clients[player_id] = addr
             self.last_seen[player_id] = time.time()
             self.game_state[player_id] = {
@@ -272,11 +222,6 @@ class GameServer:
         _ = addr
         player_id = pkt["data"].get("player_id")
         message = pkt["data"].get("message", "")
-
-        # Truncate excessively long messages to prevent abuse
-        if len(message) > MAX_CHAT_LENGTH:
-            message = message[:MAX_CHAT_LENGTH]
-
         with self.lock:
             name = self.game_state.get(player_id, {}).get("name", player_id)
             if player_id in self.last_seen:
@@ -295,7 +240,7 @@ class GameServer:
         """Receives raw UDP packets and pushes them onto the handler queue."""
         while True:
             try:
-                raw, addr = self.sock.recvfrom(MAX_PACKET_SIZE)
+                raw, addr = self.sock.recvfrom(4096)
                 packet = parse_packet(raw)
                
                 self._packet_queue.put((packet, addr))
@@ -352,23 +297,16 @@ class GameServer:
         """
         while True:
             time.sleep(5)
-            uptime_str = self._format_uptime()
             with self.lock:
                 count = len(self.clients)
                 players = [
                     state.get("name", player_id)
                     for player_id, state in self.game_state.items()
                 ]
-                total_recv = sum(s.get("packets_recv", 0) for s in self.stats.values())
-                total_sent = sum(s.get("packets_sent", 0) for s in self.stats.values())
             if count > 0:
-                print(
-                    f"[SERVER] {count} player(s) online: {', '.join(players)} | "
-                    f"uptime {uptime_str} | "
-                    f"recv={total_recv} sent={total_sent}"
-                )
+                print(f"[SERVER] {count} player(s) online: {', '.join(players)}")
             else:
-                print(f"[SERVER] No players connected. | uptime {uptime_str}")
+                print("[SERVER] No players connected.")
 
     # ── Entry point ──────────────────────────────────────────────────────────
 
@@ -384,22 +322,16 @@ class GameServer:
         The main thread sleeps in a loop and catches KeyboardInterrupt
         to allow a graceful shutdown.
         """
-        self._running = True
-        print("[SERVER] Starting server threads...")
-
         threading.Thread(target=self._receive_loop, daemon=True).start()
-        threading.Thread(target=self._dispatch_loop, daemon=True).start()
+        threading.Thread(target=self._dispatch_loop, daemon=True).start()  # ✅ FIX 3
         threading.Thread(target=self._timeout_loop, daemon=True).start()
         threading.Thread(target=self._status_loop, daemon=True).start()
 
-        print("[SERVER] All threads started. Press Ctrl+C to stop.\n")
-
         try:
-            while self._running:
+            while True:
                 time.sleep(1)
         except KeyboardInterrupt:
-            self._running = False
-            print(f"\n[SERVER] Shutting down after {self._format_uptime()} uptime.")
+            print("\n[SERVER] Shutting down.")
             self.sock.close()
 
 
