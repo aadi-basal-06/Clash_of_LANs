@@ -32,6 +32,7 @@ TICK_RATE = 20         # server tick rate in Hz (updates per second)
 TIMEOUT_SEC = 10       # seconds of silence before dropping a client
 MAX_PACKET_SIZE = 4096 # maximum UDP datagram size in bytes
 MAX_CHAT_LENGTH = 256  # maximum allowed chat message length
+MAX_PLAYERS = 10       # maximum number of concurrent players
 
 
 class GameServer:
@@ -153,7 +154,14 @@ class GameServer:
         color = pkt["data"].get("color", "#ffffff")
 
         with self.lock:
+            # Reject new connections if the server is full
             already_connected = player_id in self.clients
+            if not already_connected and len(self.clients) >= MAX_PLAYERS:
+                print(f"[SERVER] Rejected '{name}' - server full ({MAX_PLAYERS}/{MAX_PLAYERS})")
+                error_pkt = make_packet(PType.ERROR, {"message": "Server is full"}, self._next_seq())
+                self._send(error_pkt, addr)
+                return
+
             self.clients[player_id] = addr
             self.last_seen[player_id] = time.time()
             self.game_state[player_id] = {
