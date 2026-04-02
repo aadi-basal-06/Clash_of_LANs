@@ -60,6 +60,8 @@ class GameServer:
         print(f"[SERVER] Listening on {HOST}:{PORT}")
         print(f"[SERVER] Tick rate: {TICK_RATE} Hz | Timeout: {TIMEOUT_SEC}s\n")
 
+    # ── Helpers ──────────────────────────────────────────────────────────────
+
     def _next_seq(self):
         """Return the next sequence number for outgoing packets.
 
@@ -93,12 +95,16 @@ class GameServer:
             except Exception as exc:
                 print(f"[SERVER] Broadcast error to {player_id}: {exc}")
 
+    # ── Networking (send / broadcast) ────────────────────────────────────────
+
     def _send(self, packet: bytes, addr):
         """Send a packet to a single client address (unicast)."""
         try:
             self.sock.sendto(packet, addr)
         except Exception as exc:
             print(f"[SERVER] Send error to {addr}: {exc}")
+
+    # ── Player lifecycle ─────────────────────────────────────────────────────
 
     def _drop_player(self, player_id: str):
         """Remove a player from all server state and notify remaining clients.
@@ -117,6 +123,8 @@ class GameServer:
 
         print(f"[SERVER] Player '{name}' ({player_id}) disconnected")
         self._broadcast(make_packet(PType.STATE, state_snapshot, self._next_seq()))
+
+    # ── Packet handlers (called by _dispatch_loop) ──────────────────────────
 
     def _handle_join(self, pkt: dict, addr):
         """Handle a JOIN packet from a new or reconnecting player.
@@ -226,6 +234,8 @@ class GameServer:
         )
         self._broadcast(chat_packet)
 
+    # ── Core event loops (each runs in its own daemon thread) ────────────────
+
     def _receive_loop(self):
         """Receives raw UDP packets and pushes them onto the handler queue."""
         while True:
@@ -297,6 +307,8 @@ class GameServer:
                 print(f"[SERVER] {count} player(s) online: {', '.join(players)}")
             else:
                 print("[SERVER] No players connected.")
+
+    # ── Entry point ──────────────────────────────────────────────────────────
 
     def run(self):
         """Start all server threads and block until interrupted.
