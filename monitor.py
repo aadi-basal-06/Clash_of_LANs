@@ -1,7 +1,3 @@
-"""
-Terminal-based network performance monitor for the UDP game server.
-"""
-
 import collections
 import os
 import socket
@@ -21,7 +17,6 @@ class NetworkMonitor:
     def __init__(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.settimeout(2.0)
-       
 
         self.server = (SERVER_IP, SERVER_PORT)
 
@@ -79,6 +74,7 @@ class NetworkMonitor:
                     self.states_received += 1
                     self.state_updates.append(time.time())
                     self.player_states = packet["data"]
+
             except socket.timeout:
                 continue
             except Exception as exc:
@@ -144,9 +140,17 @@ class NetworkMonitor:
             self.pings_sent += 1
             time.sleep(PING_RATE)
 
+    def _join_server(self):
+        """Send JOIN so server includes us in STATE updates."""
+        join_packet = make_packet(PType.JOIN, {"player_id": PLAYER_ID, "name": "Monitor"})
+        self.sock.sendto(join_packet, self.server)
+        print("[MONITOR] Sent JOIN request.")
+
     def run(self):
         print(f"[MONITOR] Connecting to {SERVER_IP}:{SERVER_PORT}...")
-        
+
+        # Join the server so we get STATE updates
+        self._join_server()
 
         threading.Thread(target=self._receive_loop, daemon=True).start()
         threading.Thread(target=self._ping_loop, daemon=True).start()
@@ -161,3 +165,4 @@ class NetworkMonitor:
 
 if __name__ == "__main__":
     NetworkMonitor().run()
+
