@@ -1,3 +1,22 @@
+"""
+server.py - Authoritative UDP Game Server for Clash of LANs
+
+This module implements the central authoritative game server that manages
+all connected players, processes incoming packets, and broadcasts the
+authoritative game state to every client over UDP.
+
+Architecture:
+    - Uses a multi-threaded design with separate loops for receiving,
+      dispatching, timeout detection, and status reporting.
+    - A thread-safe queue decouples packet reception from processing
+      to avoid blocking the network I/O thread.
+    - All game state mutations are protected by a threading lock to
+      ensure consistency across concurrent operations.
+
+Usage:
+    python server.py
+"""
+
 import copy 
 import queue 
 import socket
@@ -6,25 +25,28 @@ import time
 
 from protocol import PType, make_packet, parse_packet
 
-HOST = "0.0.0.0"       # accepts all connections not just one IP
-PORT = 5555            # server listens on this port
-TICK_RATE = 20         # updates or processes the game state every 20 s
-TIMEOUT_SEC = 10       # if the client does not respond in 10 s then drop the client
+# ── Server Configuration Constants ──────────────────────────────────────────
+HOST = "0.0.0.0"       # bind to all available network interfaces
+PORT = 5555            # UDP port the server listens on
+TICK_RATE = 20         # server tick rate in Hz (updates per second)
+TIMEOUT_SEC = 10       # seconds of silence before dropping a client
 
 
 class GameServer:
     def __init__(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # creating a UDP socket
-        self.sock.bind((HOST, PORT))  # listen on this IP and port
+        # Create a UDP (SOCK_DGRAM) socket bound to all interfaces
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind((HOST, PORT))
 
-        self.lock = threading.Lock()  # prevents two threads from modifying the data at a time
-        self.clients = {}             # dictionary for the player => {ip, port}
-        self.game_state = {}
-        self.last_seen = {}           # detect the disconnected players
-        self.stats = {}               # statistics per player like packets sent and received
-        self.seq = 0                  # seq number
+        # Shared state protected by a reentrant lock for thread safety
+        self.lock = threading.Lock()
+        self.clients = {}             # player_id -> (ip, port) address tuple
+        self.game_state = {}          # player_id -> {x, y, name, color}
+        self.last_seen = {}           # player_id -> last heartbeat timestamp
+        self.stats = {}               # player_id -> {packets_recv, packets_sent, last_latency}
+        self.seq = 0                  # monotonically increasing sequence number
 
-       
+        # Thread-safe FIFO queue that decouples receiving from processing
         self._packet_queue = queue.Queue()
 
         print(f"[SERVER] Listening on {HOST}:{PORT}")
