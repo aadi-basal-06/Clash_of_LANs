@@ -30,6 +30,7 @@ HOST = "0.0.0.0"       # bind to all available network interfaces
 PORT = 5555            # UDP port the server listens on
 TICK_RATE = 20         # server tick rate in Hz (updates per second)
 TIMEOUT_SEC = 10       # seconds of silence before dropping a client
+MAX_PACKET_SIZE = 4096 # maximum UDP datagram size in bytes
 
 
 class GameServer:
@@ -57,6 +58,9 @@ class GameServer:
         # Thread-safe FIFO queue that decouples receiving from processing
         self._packet_queue = queue.Queue()
 
+        # Track when the server was started for uptime reporting
+        self._start_time = time.time()
+
         print(f"[SERVER] Listening on {HOST}:{PORT}")
         print(f"[SERVER] Tick rate: {TICK_RATE} Hz | Timeout: {TIMEOUT_SEC}s\n")
 
@@ -70,6 +74,15 @@ class GameServer:
         """
         self.seq += 1
         return self.seq
+
+    def get_player_count(self):
+        """Return the number of currently connected players (thread-safe)."""
+        with self.lock:
+            return len(self.clients)
+
+    def get_uptime(self):
+        """Return server uptime in seconds since start."""
+        return time.time() - self._start_time
 
     def _broadcast(self, packet: bytes, exclude_id=None):
         """Send a packet to every connected client, optionally skipping one.
@@ -240,7 +253,7 @@ class GameServer:
         """Receives raw UDP packets and pushes them onto the handler queue."""
         while True:
             try:
-                raw, addr = self.sock.recvfrom(4096)
+                raw, addr = self.sock.recvfrom(MAX_PACKET_SIZE)
                 packet = parse_packet(raw)
                
                 self._packet_queue.put((packet, addr))
