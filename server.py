@@ -94,6 +94,26 @@ class GameServer:
         hrs, mins = divmod(mins, 60)
         return f"{hrs:02d}:{mins:02d}:{secs:02d}"
 
+    def get_stats_summary(self):
+        """Return a snapshot dict of current server statistics.
+
+        Useful for external monitoring or future REST API integration.
+        """
+        with self.lock:
+            return {
+                "uptime": self._format_uptime(),
+                "player_count": len(self.clients),
+                "max_players": MAX_PLAYERS,
+                "players": list(self.game_state.keys()),
+                "total_packets_recv": sum(
+                    s.get("packets_recv", 0) for s in self.stats.values()
+                ),
+                "total_packets_sent": sum(
+                    s.get("packets_sent", 0) for s in self.stats.values()
+                ),
+                "seq": self.seq,
+            }
+
     def _broadcast(self, packet: bytes, exclude_id=None):
         """Send a packet to every connected client, optionally skipping one.
 
