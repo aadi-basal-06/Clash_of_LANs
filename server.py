@@ -310,16 +310,25 @@ class GameServer:
         """
         while True:
             time.sleep(5)
+            uptime = int(self.get_uptime())
+            mins, secs = divmod(uptime, 60)
+            hrs, mins = divmod(mins, 60)
             with self.lock:
                 count = len(self.clients)
                 players = [
                     state.get("name", player_id)
                     for player_id, state in self.game_state.items()
                 ]
+                total_recv = sum(s.get("packets_recv", 0) for s in self.stats.values())
+                total_sent = sum(s.get("packets_sent", 0) for s in self.stats.values())
             if count > 0:
-                print(f"[SERVER] {count} player(s) online: {', '.join(players)}")
+                print(
+                    f"[SERVER] {count} player(s) online: {', '.join(players)} | "
+                    f"uptime {hrs:02d}:{mins:02d}:{secs:02d} | "
+                    f"recv={total_recv} sent={total_sent}"
+                )
             else:
-                print("[SERVER] No players connected.")
+                print(f"[SERVER] No players connected. | uptime {hrs:02d}:{mins:02d}:{secs:02d}")
 
     # ── Entry point ──────────────────────────────────────────────────────────
 
