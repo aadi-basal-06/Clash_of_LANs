@@ -31,6 +31,7 @@ PORT = 5555            # UDP port the server listens on
 TICK_RATE = 20         # server tick rate in Hz (updates per second)
 TIMEOUT_SEC = 10       # seconds of silence before dropping a client
 MAX_PACKET_SIZE = 4096 # maximum UDP datagram size in bytes
+MAX_CHAT_LENGTH = 256  # maximum allowed chat message length
 
 
 class GameServer:
@@ -60,6 +61,7 @@ class GameServer:
 
         # Track when the server was started for uptime reporting
         self._start_time = time.time()
+        self._running = False
 
         print(f"[SERVER] Listening on {HOST}:{PORT}")
         print(f"[SERVER] Tick rate: {TICK_RATE} Hz | Timeout: {TIMEOUT_SEC}s\n")
@@ -235,6 +237,11 @@ class GameServer:
         _ = addr
         player_id = pkt["data"].get("player_id")
         message = pkt["data"].get("message", "")
+
+        # Truncate excessively long messages to prevent abuse
+        if len(message) > MAX_CHAT_LENGTH:
+            message = message[:MAX_CHAT_LENGTH]
+
         with self.lock:
             name = self.game_state.get(player_id, {}).get("name", player_id)
             if player_id in self.last_seen:
@@ -344,16 +351,25 @@ class GameServer:
         The main thread sleeps in a loop and catches KeyboardInterrupt
         to allow a graceful shutdown.
         """
+        self._running = True
+        print("[SERVER] Starting server threads...")
+
         threading.Thread(target=self._receive_loop, daemon=True).start()
-        threading.Thread(target=self._dispatch_loop, daemon=True).start()  # ✅ FIX 3
+        threading.Thread(target=self._dispatch_loop, daemon=True).start()
         threading.Thread(target=self._timeout_loop, daemon=True).start()
         threading.Thread(target=self._status_loop, daemon=True).start()
 
+        print("[SERVER] All threads started. Press Ctrl+C to stop.\n")
+
         try:
-            while True:
+            while self._running:
                 time.sleep(1)
         except KeyboardInterrupt:
-            print("\n[SERVER] Shutting down.")
+            self._running = False
+            uptime = int(self.get_uptime())
+            mins, secs = divmod(uptime, 60)
+            hrs, mins = divmod(mins, 60)
+            print(f"\n[SERVER] Shutting down after {hrs:02d}:{mins:02d}:{secs:02d} uptime.")
             self.sock.close()
 
 
