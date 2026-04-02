@@ -150,7 +150,7 @@ class GameServer:
         updated state to everyone else.
         """
         player_id = pkt["data"]["player_id"]
-        name = pkt["data"].get("name", player_id)
+        name = pkt["data"].get("name", player_id).strip()[:16] or player_id
         color = pkt["data"].get("color", "#ffffff")
 
         with self.lock:
