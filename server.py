@@ -87,6 +87,13 @@ class GameServer:
         """Return server uptime in seconds since start."""
         return time.time() - self._start_time
 
+    def _format_uptime(self):
+        """Return server uptime as a formatted HH:MM:SS string."""
+        uptime = int(self.get_uptime())
+        mins, secs = divmod(uptime, 60)
+        hrs, mins = divmod(mins, 60)
+        return f"{hrs:02d}:{mins:02d}:{secs:02d}"
+
     def _broadcast(self, packet: bytes, exclude_id=None):
         """Send a packet to every connected client, optionally skipping one.
 
@@ -325,9 +332,7 @@ class GameServer:
         """
         while True:
             time.sleep(5)
-            uptime = int(self.get_uptime())
-            mins, secs = divmod(uptime, 60)
-            hrs, mins = divmod(mins, 60)
+            uptime_str = self._format_uptime()
             with self.lock:
                 count = len(self.clients)
                 players = [
@@ -339,11 +344,11 @@ class GameServer:
             if count > 0:
                 print(
                     f"[SERVER] {count} player(s) online: {', '.join(players)} | "
-                    f"uptime {hrs:02d}:{mins:02d}:{secs:02d} | "
+                    f"uptime {uptime_str} | "
                     f"recv={total_recv} sent={total_sent}"
                 )
             else:
-                print(f"[SERVER] No players connected. | uptime {hrs:02d}:{mins:02d}:{secs:02d}")
+                print(f"[SERVER] No players connected. | uptime {uptime_str}")
 
     # ── Entry point ──────────────────────────────────────────────────────────
 
@@ -374,10 +379,7 @@ class GameServer:
                 time.sleep(1)
         except KeyboardInterrupt:
             self._running = False
-            uptime = int(self.get_uptime())
-            mins, secs = divmod(uptime, 60)
-            hrs, mins = divmod(mins, 60)
-            print(f"\n[SERVER] Shutting down after {hrs:02d}:{mins:02d}:{secs:02d} uptime.")
+            print(f"\n[SERVER] Shutting down after {self._format_uptime()} uptime.")
             self.sock.close()
 
 
