@@ -1,48 +1,47 @@
-import copy 
-import queue 
+import copy
+import queue
 import socket
 import threading
 import time
 
 from protocol import PType, make_packet, parse_packet
 
-HOST = "0.0.0.0"       # accepts all connections not just one IP
-PORT = 5555            # server listens on this port
-TICK_RATE = 20         # updates or processes the game state every 20 s
-TIMEOUT_SEC = 10       # if the client does not respond in 10 s then drop the client
+HOST = "0.0.0.0"
+PORT = 5555
+TICK_RATE = 20
+TIMEOUT_SEC = 10
 
 
 class GameServer:
     def __init__(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # creating a UDP socket
-        self.sock.bind((HOST, PORT))  # listen on this IP and port
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind((HOST, PORT))
 
-        self.lock = threading.Lock()  # prevents two threads from modifying the data at a time
-        self.clients = {}             # dictionary for the player => {ip, port}
+        self.lock = threading.Lock()
+        self.clients = {}
         self.game_state = {}
-        self.last_seen = {}           # detect the disconnected players
-        self.stats = {}               # statistics per player like packets sent and received
-        self.seq = 0                  # seq number
+        self.last_seen = {}
+        self.stats = {}
+        self.seq = 0
 
-       
         self._packet_queue = queue.Queue()
 
         print(f"[SERVER] Listening on {HOST}:{PORT}")
         print(f"[SERVER] Tick rate: {TICK_RATE} Hz | Timeout: {TIMEOUT_SEC}s\n")
 
-    def _next_seq(self):  # assigning unique ids
+    def _next_seq(self):
         self.seq += 1
         return self.seq
 
-    def _broadcast(self, packet: bytes, exclude_id=None):  # method sends packets to multiple clients
+    def _broadcast(self, packet: bytes, exclude_id=None):
         with self.lock:
             targets = {
                 player_id: addr
                 for player_id, addr in self.clients.items()
                 if player_id != exclude_id
-            }  # dictionary of all clients
+            }
 
-        for player_id, addr in targets.items():  # one to many comm
+        for player_id, addr in targets.items():
             try:
                 self.sock.sendto(packet, addr)
                 with self.lock:
@@ -51,7 +50,7 @@ class GameServer:
             except Exception as exc:
                 print(f"[SERVER] Broadcast error to {player_id}: {exc}")
 
-    def _send(self, packet: bytes, addr):  # one to one communication
+    def _send(self, packet: bytes, addr):
         try:
             self.sock.sendto(packet, addr)
         except Exception as exc:
@@ -60,22 +59,37 @@ class GameServer:
     def _drop_player(self, player_id: str):
         with self.lock:
             name = self.game_state.get(player_id, {}).get("name", player_id)
+            is_monitor = self.game_state.get(player_id, {}).get("is_monitor", False)
             self.clients.pop(player_id, None)
             self.game_state.pop(player_id, None)
             self.last_seen.pop(player_id, None)
             self.stats.pop(player_id, None)
-            
+
             state_snapshot = copy.deepcopy(self.game_state)
 
-        print(f"[SERVER] Player '{name}' ({player_id}) disconnected")
+        label = "Monitor" if is_monitor else "Player"
+        print(f"[SERVER] {label} '{name}' ({player_id}) disconnected")
         self._broadcast(make_packet(PType.STATE, state_snapshot, self._next_seq()))
 
     def _handle_join(self, pkt: dict, addr):
         player_id = pkt["data"]["player_id"]
         name = pkt["data"].get("name", player_id)
         color = pkt["data"].get("color", "#ffffff")
+        is_monitor = pkt["data"].get("is_monitor", False)  # <-- read monitor flag
 
         with self.lock:
+            # Remove any stale sessions with the same name (fixes duplicate player bug)
+            stale_ids = [
+                pid for pid, state in self.game_state.items()
+                if state.get("name") == name and pid != player_id
+            ]
+            for stale_id in stale_ids:
+                self.clients.pop(stale_id, None)
+                self.game_state.pop(stale_id, None)
+                self.last_seen.pop(stale_id, None)
+                self.stats.pop(stale_id, None)
+                print(f"[SERVER] Removed stale session for '{name}' ({stale_id})")
+
             already_connected = player_id in self.clients
             self.clients[player_id] = addr
             self.last_seen[player_id] = time.time()
@@ -84,19 +98,20 @@ class GameServer:
                 "y": 0,
                 "name": name,
                 "color": color,
+                "is_monitor": is_monitor,  # <-- stored so all loops can check it
             }
             self.stats[player_id] = {
                 "packets_recv": 0,
                 "packets_sent": 0,
                 "last_latency": 0,
             }
-           
+
             state_snapshot = copy.deepcopy(self.game_state)
 
         action = "rejoined" if already_connected else "joined"
-        print(f"[SERVER] '{name}' ({player_id}) {action} from {addr}")
+        label = "Monitor" if is_monitor else "Player"
+        print(f"[SERVER] {label} '{name}' ({player_id}) {action} from {addr}")
 
-        
         state_packet = make_packet(PType.STATE, state_snapshot, self._next_seq())
         self._send(state_packet, addr)
         self._broadcast(state_packet, exclude_id=player_id)
@@ -110,11 +125,14 @@ class GameServer:
         with self.lock:
             if player_id not in self.game_state:
                 return
+            # Monitors cannot move
+            if self.game_state[player_id].get("is_monitor", False):
+                return
             self.game_state[player_id]["x"] = pkt["data"].get("x", 0)
             self.game_state[player_id]["y"] = pkt["data"].get("y", 0)
             self.last_seen[player_id] = time.time()
             self.stats[player_id]["packets_recv"] += 1
-            
+
             state_snapshot = copy.deepcopy(self.game_state)
 
         self._broadcast(make_packet(PType.STATE, state_snapshot, self._next_seq()))
@@ -145,6 +163,9 @@ class GameServer:
         player_id = pkt["data"].get("player_id")
         message = pkt["data"].get("message", "")
         with self.lock:
+            # Monitors cannot chat
+            if self.game_state.get(player_id, {}).get("is_monitor", False):
+                return
             name = self.game_state.get(player_id, {}).get("name", player_id)
             if player_id in self.last_seen:
                 self.last_seen[player_id] = time.time()
@@ -157,12 +178,11 @@ class GameServer:
         self._broadcast(chat_packet)
 
     def _receive_loop(self):
-        """Receives raw UDP packets and pushes them onto the handler queue."""
+        """Receives raw UDP packets and pushes them onto the queue."""
         while True:
             try:
                 raw, addr = self.sock.recvfrom(4096)
                 packet = parse_packet(raw)
-               
                 self._packet_queue.put((packet, addr))
             except ValueError as exc:
                 print(f"[SERVER] Parse error: {exc}")
@@ -170,7 +190,7 @@ class GameServer:
                 print(f"[SERVER] Receive loop error: {exc}")
 
     def _dispatch_loop(self):
-        """Processes packets from the queue sequentially (no race conditions)."""
+        """Processes packets from the queue sequentially."""
         handlers = {
             PType.JOIN:  self._handle_join,
             PType.MOVE:  self._handle_move,
@@ -205,14 +225,16 @@ class GameServer:
                 self._drop_player(player_id)
 
     def _status_loop(self):
+        """Reports only real players, excluding monitors."""
         while True:
             time.sleep(5)
             with self.lock:
-                count = len(self.clients)
                 players = [
-                    state.get("name", player_id)
-                    for player_id, state in self.game_state.items()
+                    state.get("name", pid)
+                    for pid, state in self.game_state.items()
+                    if not state.get("is_monitor", False)  # <-- exclude monitors
                 ]
+                count = len(players)
             if count > 0:
                 print(f"[SERVER] {count} player(s) online: {', '.join(players)}")
             else:
@@ -220,7 +242,7 @@ class GameServer:
 
     def run(self):
         threading.Thread(target=self._receive_loop, daemon=True).start()
-        threading.Thread(target=self._dispatch_loop, daemon=True).start()  # ✅ FIX 3
+        threading.Thread(target=self._dispatch_loop, daemon=True).start()
         threading.Thread(target=self._timeout_loop, daemon=True).start()
         threading.Thread(target=self._status_loop, daemon=True).start()
 
