@@ -13,6 +13,14 @@ TIMEOUT_SEC = 10
 
 
 class GameServer:
+    """Authoritative UDP game server that manages player connections and game state.
+
+    The server uses a producer-consumer pattern: a receive thread pushes
+    parsed packets onto a queue, and a dispatch thread processes them
+    sequentially.  This avoids race conditions while keeping the network
+    I/O non-blocking.
+    """
+
     def __init__(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((HOST, PORT))
@@ -56,7 +64,14 @@ class GameServer:
         except Exception as exc:
             print(f"[SERVER] Send error to {addr}: {exc}")
 
+    # ── Player lifecycle ─────────────────────────────────────────────────────
+
     def _drop_player(self, player_id: str):
+        """Remove a player from all server state and notify remaining clients.
+
+        After cleanup, a fresh STATE packet is broadcast so every client
+        removes the departed player from their local world view.
+        """
         with self.lock:
             name = self.game_state.get(player_id, {}).get("name", player_id)
             is_monitor = self.game_state.get(player_id, {}).get("is_monitor", False)
@@ -71,7 +86,15 @@ class GameServer:
         print(f"[SERVER] {label} '{name}' ({player_id}) disconnected")
         self._broadcast(make_packet(PType.STATE, state_snapshot, self._next_seq()))
 
+    # ── Packet handlers (called by _dispatch_loop) ──────────────────────────
+
     def _handle_join(self, pkt: dict, addr):
+        """Handle a JOIN packet from a new or reconnecting player.
+
+        Registers the player in all server dictionaries, then sends the
+        full game state back to the joining client and broadcasts the
+        updated state to everyone else.
+        """
         player_id = pkt["data"]["player_id"]
         name = pkt["data"].get("name", player_id)
         color = pkt["data"].get("color", "#ffffff")
@@ -117,6 +140,11 @@ class GameServer:
         self._broadcast(state_packet, exclude_id=player_id)
 
     def _handle_move(self, pkt: dict, addr):
+        """Handle a MOVE packet containing a player's updated position.
+
+        Updates the authoritative game state with the new coordinates
+        and broadcasts the resulting state to all connected clients.
+        """
         _ = addr
         player_id = pkt["data"].get("player_id")
         if not player_id:
@@ -138,6 +166,11 @@ class GameServer:
         self._broadcast(make_packet(PType.STATE, state_snapshot, self._next_seq()))
 
     def _handle_ping(self, pkt: dict, addr):
+        """Respond to a PING with a PONG carrying the client's original timestamp.
+
+        The client uses the round-trip time to calculate latency.  This
+        also refreshes the player's last_seen timestamp to prevent timeout.
+        """
         player_id = pkt["data"].get("player_id")
         with self.lock:
             if player_id in self.last_seen:
@@ -153,12 +186,18 @@ class GameServer:
         self._send(pong, addr)
 
     def _handle_leave(self, pkt: dict, addr):
+        """Handle a graceful LEAVE packet from a client that is disconnecting."""
         _ = addr
         player_id = pkt["data"].get("player_id")
         if player_id:
             self._drop_player(player_id)
 
     def _handle_chat(self, pkt: dict, addr):
+        """Handle an incoming CHAT message and relay it to all clients.
+
+        Chat messages are broadcast to every connected player, including
+        the sender, so they see their own message in the chat log.
+        """
         _ = addr
         player_id = pkt["data"].get("player_id")
         message = pkt["data"].get("message", "")
@@ -176,6 +215,8 @@ class GameServer:
             {"player_id": player_id, "name": name, "message": message},
         )
         self._broadcast(chat_packet)
+
+    # ── Core event loops (each runs in its own daemon thread) ────────────────
 
     def _receive_loop(self):
         """Receives raw UDP packets and pushes them onto the queue."""
@@ -211,6 +252,11 @@ class GameServer:
                 print(f"[SERVER] Dispatch error: {exc}")
 
     def _timeout_loop(self):
+        """Periodically scan for players that have gone silent and drop them.
+
+        Runs every 2 seconds and compares each player's last_seen
+        timestamp against TIMEOUT_SEC to detect disconnected clients.
+        """
         while True:
             time.sleep(2)
             now = time.time()
@@ -240,7 +286,20 @@ class GameServer:
             else:
                 print("[SERVER] No players connected.")
 
+    # ── Entry point ──────────────────────────────────────────────────────────
+
     def run(self):
+        """Start all server threads and block until interrupted.
+
+        Spawns four daemon threads:
+            1. _receive_loop  - listens for incoming UDP packets
+            2. _dispatch_loop - processes queued packets sequentially
+            3. _timeout_loop  - drops silent clients
+            4. _status_loop   - logs server status periodically
+
+        The main thread sleeps in a loop and catches KeyboardInterrupt
+        to allow a graceful shutdown.
+        """
         threading.Thread(target=self._receive_loop, daemon=True).start()
         threading.Thread(target=self._dispatch_loop, daemon=True).start()
         threading.Thread(target=self._timeout_loop, daemon=True).start()

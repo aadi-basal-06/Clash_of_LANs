@@ -48,6 +48,31 @@ All packets are wrapped by `protocol.py` before being sent:
 This means `server.py`, `client.py`, and `monitor.py` all require the crypto
 dependency from `requirements.txt`.
 
+## Server Architecture
+
+The authoritative server (`server.py`) uses a multi-threaded, event-driven
+architecture to handle concurrent players efficiently over UDP:
+
+| Thread           | Role                                              |
+| ---------------- | ------------------------------------------------- |
+| `_receive_loop`  | Reads raw UDP datagrams and enqueues parsed packets |
+| `_dispatch_loop` | Processes queued packets sequentially (no races)  |
+| `_timeout_loop`  | Drops players silent for more than `TIMEOUT_SEC`  |
+| `_status_loop`   | Periodically logs online player count             |
+
+**Packet flow:**
+
+```
+Client ──UDP──► _receive_loop ──Queue──► _dispatch_loop ──► handler
+                                                            │
+                                                   _broadcast / _send
+                                                            │
+                                                    ◄──UDP──┘
+```
+
+All shared state (`clients`, `game_state`, `last_seen`, `stats`) is protected
+by a `threading.Lock` to guarantee consistency across threads.
+
 ## Project Layout
 
 ```text
